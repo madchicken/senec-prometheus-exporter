@@ -4,7 +4,7 @@ import yargs = require('yargs');
 import client, { register } from 'prom-client';
 import fetch from 'node-fetch';
 
-function hex2float(hexNum: string) {
+function hex2float(hexNum: string): number {
   const bytes = new Uint8Array(hexNum.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
 
   const bits = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
@@ -28,12 +28,24 @@ interface ClientOptions {
   port?: number;
   interval?: number;
   debug?: boolean;
+  wallbox?: boolean;
 }
 
-const options: ClientOptions & any = yargs
+const options: ClientOptions = yargs
   .options({
-    host: { alias: 'h', description: 'Specify SENEC System HOST or IP', demandOption: true },
+    host: {
+      alias: 'h',
+      description: 'Specify SENEC System HOST or IP',
+      type: 'string',
+      demandOption: true,
+    },
     port: { description: 'Used HTTP port', default: DEFAULT_HTTP_PORT },
+    wallbox: {
+      alias: 'w',
+      description: 'Scrape info about wallbox',
+      boolean: true,
+      default: false,
+    },
     interval: { alias: 'i', description: 'Scraping interval in seconds', default: 60 },
     debug: { alias: 'd', description: 'Debug mode', boolean: true, default: false },
   })
@@ -47,17 +59,74 @@ interface Payload {
     GUI_BAT_DATA_FUEL_CHARGE: string;
     GUI_INVERTER_POWER: string;
   };
+  WALLBOX?: {
+    HW_TYPE: string;
+    APPARENT_CHARGING_POWER: string;
+    UTMP: string;
+    L1_CHARGING_CURRENT: string;
+    L2_CHARGING_CURRENT: string;
+    L3_CHARGING_CURRENT: string;
+    MAX_CHARGING_CURRENT_IC: string;
+    MAX_CHARGING_CURRENT_RATED: string;
+    MAX_CHARGING_CURRENT_DEFAULT: string;
+    MAX_CHARGING_CURRENT_ICMAX: string;
+    PROHIBIT_USAGE: string;
+    STATE: string;
+  };
 }
 
-const payload: Payload = {
+interface ResponsePayload {
   ENERGY: {
-    GUI_BAT_DATA_POWER: '',
-    GUI_INVERTER_POWER: '',
-    GUI_HOUSE_POW: '',
-    GUI_GRID_POW: '',
-    GUI_BAT_DATA_FUEL_CHARGE: '',
-  },
-};
+    GUI_BAT_DATA_POWER: string;
+    GUI_HOUSE_POW: string;
+    GUI_GRID_POW: string;
+    GUI_BAT_DATA_FUEL_CHARGE: string;
+    GUI_INVERTER_POWER: string;
+  };
+  WALLBOX?: {
+    HW_TYPE: string[];
+    APPARENT_CHARGING_POWER: string[];
+    UTMP: string[];
+    L1_CHARGING_CURRENT: string[];
+    L2_CHARGING_CURRENT: string[];
+    L3_CHARGING_CURRENT: string[];
+    MAX_CHARGING_CURRENT_IC: string[];
+    MAX_CHARGING_CURRENT_RATED: string[];
+    MAX_CHARGING_CURRENT_DEFAULT: string[];
+    MAX_CHARGING_CURRENT_ICMAX: string[];
+    PROHIBIT_USAGE: string[];
+    STATE: string[];
+  };
+}
+
+function generatePayload(options: ClientOptions): Payload {
+  const payload: Payload = {
+    ENERGY: {
+      GUI_BAT_DATA_POWER: '',
+      GUI_INVERTER_POWER: '',
+      GUI_HOUSE_POW: '',
+      GUI_GRID_POW: '',
+      GUI_BAT_DATA_FUEL_CHARGE: '',
+    },
+  };
+  if (options.wallbox) {
+    payload.WALLBOX = {
+      HW_TYPE: '',
+      APPARENT_CHARGING_POWER: '',
+      UTMP: '',
+      L1_CHARGING_CURRENT: '',
+      L2_CHARGING_CURRENT: '',
+      L3_CHARGING_CURRENT: '',
+      MAX_CHARGING_CURRENT_IC: '',
+      MAX_CHARGING_CURRENT_RATED: '',
+      MAX_CHARGING_CURRENT_DEFAULT: '',
+      MAX_CHARGING_CURRENT_ICMAX: '',
+      PROHIBIT_USAGE: '',
+      STATE: '',
+    };
+  }
+  return payload;
+}
 
 const metrics = {
   batteryLevel: new client.Gauge({
@@ -84,26 +153,67 @@ const metrics = {
     name: 'senec_solar_power',
     help: 'Current Solar Production Power',
   }),
+
+  wallboxPower: new client.Gauge({
+    name: 'senec_wallbox_power',
+    help: 'Current Wallbox Consumption Power',
+  }),
+
+  wallboxState: new client.Gauge({
+    name: 'senec_wallbox_state',
+    help: 'Current Wallbox State',
+  }),
 };
 
-async function readSenecData(config: ClientOptions) {
-  try {
-    const response = await fetch(`http://${config.host}/lala.cgi`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    const data: Payload = await response.json();
-    const batteryChargingPower = hex2float(data.ENERGY.GUI_BAT_DATA_POWER.replace('fl_', ''));
-    const solarPower = hex2float(data.ENERGY.GUI_INVERTER_POWER.replace('fl_', ''));
-    const housePower = hex2float(data.ENERGY.GUI_HOUSE_POW.replace('fl_', ''));
-    const gridPower = hex2float(data.ENERGY.GUI_GRID_POW.replace('fl_', ''));
-    const batteryLevel = hex2float(data.ENERGY.GUI_BAT_DATA_FUEL_CHARGE.replace('fl_', ''));
+function exposeSolarPanelsMetrics(data: ResponsePayload) {
+  const batteryChargingPower = hex2float(data.ENERGY.GUI_BAT_DATA_POWER.replace('fl_', ''));
+  const solarPower = hex2float(data.ENERGY.GUI_INVERTER_POWER.replace('fl_', ''));
+  const housePower = hex2float(data.ENERGY.GUI_HOUSE_POW.replace('fl_', ''));
+  const gridPower = hex2float(data.ENERGY.GUI_GRID_POW.replace('fl_', ''));
+  const batteryLevel = hex2float(data.ENERGY.GUI_BAT_DATA_FUEL_CHARGE.replace('fl_', ''));
 
-    metrics.batteryChargingPower.set(batteryChargingPower);
-    metrics.batteryLevel.set(batteryLevel);
-    metrics.solarPower.set(solarPower);
-    metrics.housePower.set(housePower);
-    metrics.gridPower.set(gridPower);
+  metrics.batteryChargingPower.set(batteryChargingPower);
+  metrics.batteryLevel.set(batteryLevel);
+  metrics.solarPower.set(solarPower);
+  metrics.housePower.set(housePower);
+  metrics.gridPower.set(gridPower);
+
+  if (options.debug) {
+    console.log(`batteryChargingPower: ${batteryChargingPower}`);
+    console.log(`solarPower: ${solarPower}`);
+    console.log(`housePower: ${housePower}`);
+    console.log(`gridPower: ${gridPower}`);
+    console.log(`batteryLevel: ${batteryLevel}`);
+  }
+}
+
+function exposeWallboxMetrics(data: ResponsePayload) {
+  if (data.WALLBOX) {
+    const wallboxState = parseInt(data.WALLBOX.APPARENT_CHARGING_POWER[0].replace('u8_', ''), 16);
+
+    const wallboxPowerConsumption = hex2float(
+      data.WALLBOX.APPARENT_CHARGING_POWER[0].replace('fl_', '')
+    );
+
+    metrics.wallboxPower.set(wallboxPowerConsumption);
+    metrics.wallboxState.set(wallboxState);
+
+    if (options.debug) {
+      console.log(`wallboxPowerConsumption: ${wallboxPowerConsumption}`);
+      console.log(`wallboxState: ${wallboxState}`);
+    }
+  }
+}
+
+async function readSenecData(options: ClientOptions) {
+  try {
+    const response = await fetch(`http://${options.host}/lala.cgi`, {
+      method: 'POST',
+      body: JSON.stringify(generatePayload(options)),
+    });
+    const data: ResponsePayload = await response.json();
+    exposeSolarPanelsMetrics(data);
+    exposeWallboxMetrics(data);
   } catch (error) {
     this.log(error);
   }
