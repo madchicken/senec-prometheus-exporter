@@ -3,18 +3,8 @@ import express, { Express } from 'express';
 import yargs = require('yargs');
 import client, { register } from 'prom-client';
 import fetch from 'node-fetch';
-
-function hex2float(hexNum: string): number {
-  const bytes = new Uint8Array(hexNum.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-
-  const bits = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
-  const sign = bits >>> 31 == 0 ? 1.0 : -1.0;
-  const e = (bits >>> 23) & 0xff;
-  const m = e == 0 ? (bits & 0x7fffff) << 1 : (bits & 0x7fffff) | 0x800000;
-  const f = sign * m * Math.pow(2, e - 150);
-
-  return Number(f.toFixed(0));
-}
+import { hex2float } from './utils';
+import { Payload, ResponsePayload } from './types';
 
 const DEFAULT_HTTP_PORT = 9898;
 const expr: Express = express();
@@ -50,54 +40,6 @@ const options: ClientOptions = yargs
     debug: { alias: 'd', description: 'Debug mode', boolean: true, default: false },
   })
   .help().argv;
-
-interface Payload {
-  ENERGY: {
-    GUI_BAT_DATA_POWER: string;
-    GUI_HOUSE_POW: string;
-    GUI_GRID_POW: string;
-    GUI_BAT_DATA_FUEL_CHARGE: string;
-    GUI_INVERTER_POWER: string;
-  };
-  WALLBOX?: {
-    HW_TYPE: string;
-    APPARENT_CHARGING_POWER: string;
-    UTMP: string;
-    L1_CHARGING_CURRENT: string;
-    L2_CHARGING_CURRENT: string;
-    L3_CHARGING_CURRENT: string;
-    MAX_CHARGING_CURRENT_IC: string;
-    MAX_CHARGING_CURRENT_RATED: string;
-    MAX_CHARGING_CURRENT_DEFAULT: string;
-    MAX_CHARGING_CURRENT_ICMAX: string;
-    PROHIBIT_USAGE: string;
-    STATE: string;
-  };
-}
-
-interface ResponsePayload {
-  ENERGY: {
-    GUI_BAT_DATA_POWER: string;
-    GUI_HOUSE_POW: string;
-    GUI_GRID_POW: string;
-    GUI_BAT_DATA_FUEL_CHARGE: string;
-    GUI_INVERTER_POWER: string;
-  };
-  WALLBOX?: {
-    HW_TYPE: string[];
-    APPARENT_CHARGING_POWER: string[];
-    UTMP: string[];
-    L1_CHARGING_CURRENT: string[];
-    L2_CHARGING_CURRENT: string[];
-    L3_CHARGING_CURRENT: string[];
-    MAX_CHARGING_CURRENT_IC: string[];
-    MAX_CHARGING_CURRENT_RATED: string[];
-    MAX_CHARGING_CURRENT_DEFAULT: string[];
-    MAX_CHARGING_CURRENT_ICMAX: string[];
-    PROHIBIT_USAGE: string[];
-    STATE: string[];
-  };
-}
 
 function generatePayload(options: ClientOptions): Payload {
   const payload: Payload = {
@@ -139,6 +81,11 @@ const metrics = {
     help: 'Current Battery Charging Power',
   }),
 
+  batteryDischargingPower: new client.Gauge({
+    name: 'senec_battery_discharging_power',
+    help: 'Current Battery Discharging Power',
+  }),
+
   housePower: new client.Gauge({
     name: 'senec_house_consumption',
     help: 'Current House Consumption',
@@ -147,6 +94,11 @@ const metrics = {
   gridPower: new client.Gauge({
     name: 'senec_grid_consumption',
     help: 'Current Consumption from the Drid',
+  }),
+
+  gridPowerEmission: new client.Gauge({
+    name: 'senec_grid_emission',
+    help: 'Current power emitted to the Drid',
   }),
 
   solarPower: new client.Gauge({
@@ -172,17 +124,21 @@ function exposeSolarPanelsMetrics(data: ResponsePayload) {
   const gridPower = hex2float(data.ENERGY.GUI_GRID_POW.replace('fl_', ''));
   const batteryLevel = hex2float(data.ENERGY.GUI_BAT_DATA_FUEL_CHARGE.replace('fl_', ''));
 
-  metrics.batteryChargingPower.set(batteryChargingPower);
+  metrics.batteryChargingPower.set(batteryChargingPower > 0 ? batteryChargingPower : 0);
+  metrics.batteryDischargingPower.set(batteryChargingPower < 0 ? -batteryChargingPower : 0);
   metrics.batteryLevel.set(batteryLevel);
   metrics.solarPower.set(solarPower);
   metrics.housePower.set(housePower);
-  metrics.gridPower.set(gridPower);
+  metrics.gridPower.set(gridPower > 0 ? gridPower : 0);
+  metrics.gridPowerEmission.set(gridPower < 0 ? -gridPower : 0);
 
   if (options.debug) {
-    console.log(`batteryChargingPower: ${batteryChargingPower}`);
+    console.log(`batteryChargingPower: ${batteryChargingPower > 0 ? batteryChargingPower : 0}`);
+    console.log(`batteryDischargingPower: ${batteryChargingPower < 0 ? -batteryChargingPower : 0}`);
     console.log(`solarPower: ${solarPower}`);
     console.log(`housePower: ${housePower}`);
-    console.log(`gridPower: ${gridPower}`);
+    console.log(`gridPower: ${gridPower > 0 ? gridPower : 0}`);
+    console.log(`gridPowerEmission: ${gridPower < 0 ? -gridPower : 0}`);
     console.log(`batteryLevel: ${batteryLevel}`);
   }
 }
