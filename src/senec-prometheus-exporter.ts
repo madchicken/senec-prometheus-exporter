@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import express, { Express } from 'express';
-import yargs = require('yargs');
 import client, { register } from 'prom-client';
 import fetch from 'node-fetch';
-import { hex2float } from './utils';
-import { Payload, ResponsePayload } from './types';
+import { PublicResponsePayload, WallboxResponsePayload } from './types';
+import yargs = require('yargs');
 
 const DEFAULT_HTTP_PORT = 9898;
 const expr: Express = express();
@@ -15,6 +14,9 @@ expr.get('/metrics', async (req, res) => {
 
 interface ClientOptions {
   host: string;
+  token: string;
+  username?: string;
+  password?: string;
   port?: number;
   interval?: number;
   debug?: boolean;
@@ -29,6 +31,24 @@ const options: ClientOptions = yargs
       type: 'string',
       demandOption: true,
     },
+    token: {
+      alias: 't',
+      description: 'Session Token',
+      type: 'string',
+      demandOption: false,
+    },
+    username: {
+      alias: 'u',
+      description: 'Username',
+      type: 'string',
+      demandOption: false,
+    },
+    password: {
+      alias: 'p',
+      description: 'Password',
+      type: 'string',
+      demandOption: true,
+    },
     port: { description: 'Used HTTP port', default: DEFAULT_HTTP_PORT },
     wallbox: {
       alias: 'w',
@@ -40,35 +60,6 @@ const options: ClientOptions = yargs
     debug: { alias: 'd', description: 'Debug mode', boolean: true, default: false },
   })
   .help().argv;
-
-function generatePayload(options: ClientOptions): Payload {
-  const payload: Payload = {
-    ENERGY: {
-      GUI_BAT_DATA_POWER: '',
-      GUI_INVERTER_POWER: '',
-      GUI_HOUSE_POW: '',
-      GUI_GRID_POW: '',
-      GUI_BAT_DATA_FUEL_CHARGE: '',
-    },
-  };
-  if (options.wallbox) {
-    payload.WALLBOX = {
-      HW_TYPE: '',
-      APPARENT_CHARGING_POWER: '',
-      UTMP: '',
-      L1_CHARGING_CURRENT: '',
-      L2_CHARGING_CURRENT: '',
-      L3_CHARGING_CURRENT: '',
-      MAX_CHARGING_CURRENT_IC: '',
-      MAX_CHARGING_CURRENT_RATED: '',
-      MAX_CHARGING_CURRENT_DEFAULT: '',
-      MAX_CHARGING_CURRENT_ICMAX: '',
-      PROHIBIT_USAGE: '',
-      STATE: '',
-    };
-  }
-  return payload;
-}
 
 const metrics = {
   batteryLevel: new client.Gauge({
@@ -109,69 +100,137 @@ const metrics = {
   wallboxPower: new client.Gauge({
     name: 'senec_wallbox_power',
     help: 'Current Wallbox Consumption Power',
+    labelNames: ['serial', 'number'],
   }),
 
   wallboxState: new client.Gauge({
     name: 'senec_wallbox_state',
     help: 'Current Wallbox State',
+    labelNames: ['serial', 'number'],
+  }),
+
+  wallboxTemp: new client.Gauge({
+    name: 'senec_wallbox_temp',
+    help: 'Current Wallbox Temperature in Celsius',
+    labelNames: ['serial', 'number'],
   }),
 };
 
-function exposeSolarPanelsMetrics(data: ResponsePayload) {
-  const batteryChargingPower = hex2float(data.ENERGY.GUI_BAT_DATA_POWER.replace('fl_', ''));
-  const solarPower = hex2float(data.ENERGY.GUI_INVERTER_POWER.replace('fl_', ''));
-  const housePower = hex2float(data.ENERGY.GUI_HOUSE_POW.replace('fl_', ''));
-  const gridPower = hex2float(data.ENERGY.GUI_GRID_POW.replace('fl_', ''));
-  const batteryLevel = hex2float(data.ENERGY.GUI_BAT_DATA_FUEL_CHARGE.replace('fl_', ''));
+function exposeSolarPanelsMetrics(data: PublicResponsePayload) {
+  const batteryChargingPower = data.accuexport.now;
+  const solarPower = data.powergenerated.now;
+  const housePower = data.consumption.now;
+  const gridExportedPower = data.gridexport.now;
+  const gridImportedPower = data.gridimport.now;
+  const batteryLevel = data.acculevel.now;
 
   metrics.batteryChargingPower.set(batteryChargingPower > 0 ? batteryChargingPower : 0);
   metrics.batteryDischargingPower.set(batteryChargingPower < 0 ? -batteryChargingPower : 0);
   metrics.batteryLevel.set(batteryLevel);
   metrics.solarPower.set(solarPower);
   metrics.housePower.set(housePower);
-  metrics.gridPower.set(gridPower > 0 ? gridPower : 0);
-  metrics.gridPowerEmission.set(gridPower < 0 ? -gridPower : 0);
+  metrics.gridPower.set(gridImportedPower);
+  metrics.gridPowerEmission.set(gridExportedPower);
 
   if (options.debug) {
     console.log(`batteryChargingPower: ${batteryChargingPower > 0 ? batteryChargingPower : 0}`);
     console.log(`batteryDischargingPower: ${batteryChargingPower < 0 ? -batteryChargingPower : 0}`);
     console.log(`solarPower: ${solarPower}`);
     console.log(`housePower: ${housePower}`);
-    console.log(`gridPower: ${gridPower > 0 ? gridPower : 0}`);
-    console.log(`gridPowerEmission: ${gridPower < 0 ? -gridPower : 0}`);
+    console.log(`gridPowerImport: ${gridImportedPower}`);
+    console.log(`gridPowerEmission: ${gridExportedPower}`);
     console.log(`batteryLevel: ${batteryLevel}`);
   }
 }
 
-function exposeWallboxMetrics(data: ResponsePayload) {
-  if (data.WALLBOX) {
-    const wallboxState = parseInt(data.WALLBOX.APPARENT_CHARGING_POWER[0].replace('u8_', ''), 16);
-
-    const wallboxPowerConsumption = hex2float(
-      data.WALLBOX.APPARENT_CHARGING_POWER[0].replace('fl_', '')
+function exposeWallboxMetrics(data: WallboxResponsePayload[]) {
+  data.forEach(d => {
+    metrics.wallboxPower.set(
+      { serial: d.caseSerialNumber, number: d.id },
+      d.currentApparentChargingPowerInKVa
     );
-
-    metrics.wallboxPower.set(wallboxPowerConsumption);
-    metrics.wallboxState.set(wallboxState);
-
+    metrics.wallboxTemp.set({ serial: d.caseSerialNumber, number: d.id }, d.temperatureInCelsius);
     if (options.debug) {
-      console.log(`wallboxPowerConsumption: ${wallboxPowerConsumption}`);
-      console.log(`wallboxState: ${wallboxState}`);
+      console.log(`wallbox:`, d);
     }
+  });
+}
+
+async function readSenecData(sessionIds: string[]) {
+  try {
+    const response = await fetch(
+      `https://mein-senec.de/endkunde/api/status/getstatusoverview.php?anlageNummer=0`,
+      {
+        method: 'GET',
+        headers: {
+          Cookie: sessionIds.map(sessionId => `JSESSIONID=${sessionId}`).join('; '),
+          Referer: 'https://mein-senec.de/endkunde/',
+        },
+      }
+    );
+    const data: PublicResponsePayload = await response.json();
+    exposeSolarPanelsMetrics(data);
+    if (options.wallbox) {
+      const response2 = await fetch(
+        ` https://mein-senec.de/endkunde/api/wallboxes?anlageNummer=0&wallboxNummer=1`,
+        {
+          method: 'GET',
+          headers: {
+            Cookie: sessionIds.map(sessionId => `JSESSIONID=${sessionId}`).join('; '),
+            Referer: 'https://mein-senec.de/endkunde/',
+          },
+        }
+      );
+      const wallboxData: WallboxResponsePayload[] = await response2.json();
+      exposeWallboxMetrics(wallboxData);
+    }
+  } catch (error) {
+    console.log(error);
   }
 }
 
-async function readSenecData(options: ClientOptions) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function login(username: string, password: string): Promise<string> {
   try {
-    const response = await fetch(`http://${options.host}/lala.cgi`, {
+    const response = await fetch(`https://mein-senec.de/auth/login`, {
       method: 'POST',
-      body: JSON.stringify(generatePayload(options)),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'text/plain',
+      },
+      body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
     });
-    const data: ResponsePayload = await response.json();
-    exposeSolarPanelsMetrics(data);
-    exposeWallboxMetrics(data);
-  } catch (error) {
-    this.log(error);
+    return response.headers
+      .get('set-cookie')
+      .split(';')
+      .find(c => c.trim().startsWith('JSESSIONID'))
+      .split('=')[1];
+  } catch (e) {
+    console.error(e.message, e);
+    return null;
+  }
+}
+
+async function refreshToken(sessionIds: string[]) {
+  try {
+    const response = await fetch(
+      `https://mein-senec.de/endkunde/api/context/getAnlage?anlageNummer=0`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Cookie: sessionIds.map(sessionId => `JSESSIONID=${sessionId}`).join('; '),
+          Referer: 'https://mein-senec.de/endkunde/',
+        },
+      }
+    );
+    const json = await response.json();
+    console.log(`Read information for product ${json.produktName}`, json);
+    return json;
+  } catch (e) {
+    console.error(e.message, e);
+    return null;
   }
 }
 
@@ -182,12 +241,27 @@ async function run() {
   try {
     const server = expr.listen(options.port);
     console.log(`Exporter listening on port ${options.port}...(press CTRL+c to interrupt)`);
-    const timeout = setInterval(async () => await readSenecData(options), options.interval * 1000);
-    await readSenecData(options);
+    const sessionIds = options.token.split(',');
+    if (!sessionIds) {
+      console.error('Error: Token not provided.');
+      process.exit(1);
+    }
+
+    await readSenecData(sessionIds);
+    const timeout = setInterval(
+      async () => await readSenecData(sessionIds),
+      options.interval * 1000
+    );
+    const sessionRefreshTimeout = setInterval(
+      async () => await refreshToken(sessionIds),
+      10 * 60 * 1000 // every 10 minutes
+    );
+
     return new Promise<void>(resolve => {
       process.stdin.on('keypress', async (str, key) => {
         if (key.ctrl && key.name === 'c') {
           clearInterval(timeout);
+          clearInterval(sessionRefreshTimeout);
           server.close();
           resolve();
         }

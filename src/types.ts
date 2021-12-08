@@ -45,3 +45,58 @@ export interface ResponsePayload {
     STATE: string[];
   };
 }
+
+interface MetricData {
+  today: number;
+  now: number;
+}
+
+export interface PublicResponsePayload {
+  wartungsplan: {
+    maintenanceOverdue: boolean;
+    applicable: boolean;
+    maintenanceDueSoon: boolean;
+    possibleMaintenanceTypes: any[];
+    minorMaintenancePossible: boolean;
+  };
+  suppressedNotificationIds: any[];
+  wartungNotwendig: boolean;
+  steuereinheitState: string;
+  state: number;
+  powergenerated: MetricData;
+  consumption: MetricData;
+  gridexport: MetricData;
+  gridimport: MetricData;
+  accuexport: MetricData;
+  accuimport: MetricData;
+  acculevel: MetricData;
+  machine: string;
+  lastupdated: number;
+}
+
+export interface WallboxResponsePayload {
+  id: number;
+  sequenceNumber: number;
+  caseSerialNumber: string;
+  controllerSerialNumber: number;
+  powerSocketAvailable: boolean;
+  firmwareVersion: string;
+  hardwareVersion: string;
+  minPossibleApparentChargingPowerInVa: number;
+  maxPossibleChargingCurrentInA: number;
+  minPossibleChargingCurrentInA: number;
+  configuredMaxChargingCurrentInA: number;
+  configuredMinChargingCurrentInA: number;
+  chargingMode: string;
+  lastContactDate: number;
+  supportedChargingModes: string[];
+  currentApparentChargingPowerInVa: number;
+  maxApparentChargingPowerInVa: number;
+  electricVehicleConnected: boolean;
+  numberOfElectricPowerPhases: number;
+  state: string;
+  temperatureInCelsius: number;
+  stateSeverity: string;
+  maxApparentChargingPowerInKVa: number;
+  currentApparentChargingPowerInKVa: number;
+}
