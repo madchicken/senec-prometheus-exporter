@@ -171,7 +171,7 @@ async function readSenecData(options: ClientOptions) {
     exposeSolarPanelsMetrics(data);
     exposeWallboxMetrics(data);
   } catch (error) {
-    this.log(error);
+    console.log(error);
   }
 }
 
