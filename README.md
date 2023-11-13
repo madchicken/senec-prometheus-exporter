@@ -3,11 +3,11 @@ A SENEC solar system exporter for Prometheus
 
 ## Installation
 
-    npm i senec-prometheus-exporter -g
+    npm i senec_exporter -g
 
 ### Usage
 
-    senec-prometheus-exporter -h
+    senec -h
 
 ### Options
 
