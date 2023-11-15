@@ -6,6 +6,7 @@ import fetch from 'node-fetch';
 import { hex2float } from './utils';
 import { Payload, ResponsePayload } from './types';
 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const DEFAULT_HTTP_PORT = 9898;
 const expr: Express = express();
 expr.get('/metrics', async (req, res) => {
@@ -18,6 +19,7 @@ interface ClientOptions {
   port?: number;
   interval?: number;
   debug?: boolean;
+  secure?: boolean;
   wallbox?: boolean;
 }
 
@@ -37,6 +39,7 @@ const options: ClientOptions = yargs
       default: false,
     },
     interval: { alias: 'i', description: 'Scraping interval in seconds', default: 60 },
+    secure: { alias: 's', description: 'Secure mode (use https)', boolean: true, default: false },
     debug: { alias: 'd', description: 'Debug mode', boolean: true, default: false },
   })
   .help().argv;
@@ -163,7 +166,7 @@ function exposeWallboxMetrics(data: ResponsePayload) {
 
 async function readSenecData(options: ClientOptions) {
   try {
-    const response = await fetch(`http://${options.host}/lala.cgi`, {
+    const response = await fetch(`${options.secure ? 'https': 'http'}://${options.host}/lala.cgi`, {
       method: 'POST',
       body: JSON.stringify(generatePayload(options)),
     });
