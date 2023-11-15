@@ -1,7 +1,7 @@
 {
   "name": "senec_exporter",
   "description": "Senec Solar Sytem Prometheus exporter",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "main": "dist/senec_exporter.js",
   "license": "MIT",
   "scripts": {
